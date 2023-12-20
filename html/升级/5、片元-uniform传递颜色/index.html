@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>三角形转化</title>
+</head>
+
+<body>
+  <h3>在JS中uniform传递颜色</h3>
+  <!-- canvas：用来展示WebGPU渲染的结果 -->
+  <canvas id="webgpu" width="500" height="500"></canvas>
+  <script type="module">
+    import { vertex, fragment } from './adapter.js'
+    import * as glMatrix from '../gl-matrix-master/dist/esm/index.js'
+
+    // 1、GPU设备对象
+    // 浏览器请求GPU适配器
+    const adapter = await navigator.gpu.requestAdapter();
+    // 获取GPU设备对象，通过GPU设备对象device的WebGPU API可以控制GPU渲染过程
+    const device = await adapter.requestDevice();
+    console.log("device", device);
+
+    // 2、Canvas画布 -配置WebGPU上下文
+    //配置WebGPU上下文，把id名为webgpu的Canvas元素作为WebGPU的画布
+    const canvas = document.getElementById('webgpu');
+    const context = canvas.getContext("webgpu");
+
+    //获取浏览器默认的
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    context.configure({
+      device: device,//WebGPU渲染器使用的GPU设备对象
+      format: format,//WebGPU渲染器使用的颜色格式
+    });
+
+    //3、 顶点数据写入顶点缓冲区
+    const vertexArray = new Float32Array([
+      // 三角形三个顶点坐标的x、y、z值
+      0.0, 0.0, 0.0,//顶点1坐标
+      1.0, 0.0, 0.0,//顶点2坐标
+      0.0, 1.0, 0.0,//顶点3坐标
+    ]);
+
+    // 顶点缓冲区
+    const vertexBuffer = device.createBuffer({
+      size: vertexArray.byteLength,//数据字节长度
+      //usage设置该缓冲区的用途(作为顶点缓冲区|可以写入顶点数据)
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+    console.log('类型化数组数据字节长度', vertexArray.byteLength);
+
+    // 顶点数据写入顶点缓冲区
+    //把vertexArray里面的顶点数据写入到vertexBuffer对应的GPU显存缓冲区中
+    //参数2的0表示从vertexArray的数据开头读取数据。
+    device.queue.writeBuffer(vertexBuffer, 0, vertexArray)
+
+    // 4、渲染管道
+    const pipeline = device.createRenderPipeline({
+      layout: 'auto',
+      // 顶点着色器
+      vertex: {
+        module: device.createShaderModule({ code: vertex }),
+        entryPoint: "main",//指定入口函数
+        buffers: [// 顶点所有的缓冲区模块设置
+          {//其中一个顶点缓冲区设置
+            arrayStride: 3 * 4,//一个顶点数据占用的字节长度，该缓冲区一个顶点包含xyz三个分量，每个数字是4字节浮点数，3*4字节长度
+            attributes: [{// 顶点缓冲区属性
+              shaderLocation: 0,//GPU显存上顶点缓冲区标记存储位置
+              format: "float32x3",//格式：loat32x3表示一个顶点数据包含3个32位浮点数
+              offset: 0//arrayStride表示每组顶点数据间隔字节数，offset表示读取改组的偏差字节数，没特殊需要一般设置0
+            }]
+          }
+        ]
+      },
+      // 图元
+      primitive: {
+        // topology: "line-strip",//不闭合折线
+        // topology: "point-list",//不闭合折线
+        topology: "triangle-list",//绘制三角形
+      },
+      // 片元着色器
+      fragment: {//片元相关配置
+        // module:设置渲染管线要执行的片元着色器代码
+        module: device.createShaderModule({ code: fragment }),
+        entryPoint: "main",
+        targets: [{
+          format: format//和WebGPU上下文配置的颜色格式保持一致
+        }]
+      },
+    });
+
+    // 颜色 - uniform数据
+    const colorArray = new Float32Array([0.5, 0.0, 0.0]);
+
+    // uniform缓冲区
+    const colorBuffer = device.createBuffer({
+      size: colorArray.byteLength,//数据字节长度
+      //usage设置该缓冲区的用途(作为顶点缓冲区|可以写入顶点数据)
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    // colorArray里面矩阵数据写入uniform缓冲区colorBuffer
+    device.queue.writeBuffer(colorBuffer, 0, colorArray)
+
+
+    const bindGroup = device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),//绑定组，标记为0
+      // 一个组里面可以包含多个uniform数据
+      entries: [//每个元素可以用来设置一个uniform数据
+        {
+          binding: 0,//标记组里面的uniform数据
+          resource: { buffer: colorBuffer }
+        }
+      ]
+    });
+
+    // 创建GPU命令编码器对象
+    const commandEncoder = device.createCommandEncoder();
+
+    const renderPass = commandEncoder.beginRenderPass({
+      // 给渲染通道指定颜色缓冲区，配置指定的缓冲区
+      colorAttachments: [{
+        // 指向用于Canvas画布的纹理视图对象(Canvas对应的颜色缓冲区)
+        // 该渲染通道renderPass输出的像素数据会存储到Canvas画布对应的颜色缓冲区(纹理视图对象)
+        view: context.getCurrentTexture().createView(),
+        storeOp: 'store',//像素数据写入颜色缓冲区
+        loadOp: 'clear',
+        clearValue: { r: 0.6, g: 0.6, b: 0.5, a: 1.0 }, //背景颜色
+      }]
+    });
+
+    // 设置该渲染通道控制渲染管线
+    renderPass.setPipeline(pipeline);
+    // 关联顶点缓冲区数据和渲染管线
+    renderPass.setVertexBuffer(0, vertexBuffer);
+
+    // 把绑定组里面的uniform数据传递给着色器中uniform变量
+    // 参数1的0和.getBindGroupLayout(0)参数一致，都是0
+    renderPass.setBindGroup(0, bindGroup);
+    // 绘制命令
+    renderPass.draw(3);
+    // 渲染通道结束命令.end()
+    renderPass.end();
+
+    // const commandEncoder = device.createCommandEncoder();
+    const commandBuffer = commandEncoder.finish();
+    // 命令编码器缓冲区中命令传入GPU设备对象的命令队列.queue
+    device.queue.submit([commandBuffer]);
+
+  </script>
+</body>
+
+</html>
