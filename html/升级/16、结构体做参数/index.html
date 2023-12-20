@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>三角形转化</title>
+</head>
+
+<body>
+  <h3>
+    <ul>
+      <li>结构体作为顶点着色器main函数参数</li>
+      <li>结构体作为片元着色器main函数参数</li>
+    </ul>
+  </h3>
+  <!-- canvas：用来展示WebGPU渲染的结果 -->
+  <canvas id="webgpu" width="500" height="500"></canvas>
+  <script type="module">
+    import { vertex, fragment } from './adapter.js'
+    import * as glMatrix from '../gl-matrix-master/dist/esm/index.js'
+
+    // 1、GPU设备对象
+    // 浏览器请求GPU适配器
+    const adapter = await navigator.gpu.requestAdapter();
+    // 获取GPU设备对象，通过GPU设备对象device的WebGPU API可以控制GPU渲染过程
+    const device = await adapter.requestDevice();
+    console.log("device", device);
+
+    // 2、Canvas画布 -配置WebGPU上下文
+    //配置WebGPU上下文，把id名为webgpu的Canvas元素作为WebGPU的画布
+    const canvas = document.getElementById('webgpu');
+    const context = canvas.getContext("webgpu");
+
+    //获取浏览器默认的
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    context.configure({
+      device: device,//WebGPU渲染器使用的GPU设备对象
+      format: format,//WebGPU渲染器使用的颜色格式
+    });
+
+    //3、 顶点数据写入顶点缓冲区
+    const vertexArray = new Float32Array([
+      // 顶点1位置    顶点1颜色(红色)
+      0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+      // 顶点2位置    顶点2颜色(绿色)
+      1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+      // 顶点3位置    顶点3颜色(蓝色)
+      0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+    ]);
+
+    // 创建顶点数据的缓冲区(顶点位置、顶点颜色)
+    const vertexBuffer = device.createBuffer({
+      size: vertexArray.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+
+    // 顶点位置、颜色数据写入缓冲区
+    device.queue.writeBuffer(vertexBuffer, 0, vertexArray)
+
+    // 4、渲染管道
+    const pipeline = device.createRenderPipeline({
+      layout: 'auto',
+      // 顶点着色器
+      vertex: {
+        module: device.createShaderModule({ code: vertex }),
+        entryPoint: "main",//指定入口函数
+        buffers: [//顶点缓冲区相关设置
+          {
+            arrayStride: 6 * 4,
+            attributes: [{
+              //顶点位置缓冲区存储位置标记
+              shaderLocation: 1,
+              format: "float32x3",
+              //一个顶点可能包含多种类型顶点数据，间隔顶点位置的3个数字，才能获取颜色数据,
+              // 3个数字，每个数字4字节
+              offset: 3 * 4
+            },{
+              //顶点位置缓冲区存储位置标记
+              shaderLocation: 0,
+              format: "float32x3",
+              offset: 0
+            },]
+          }
+        ]
+      },
+      // 图元
+      primitive: {
+        // topology: "line-strip",//不闭合折线
+        // topology: "point-list",//不闭合折线
+        topology: "triangle-list",//绘制三角形
+      },
+      // 片元着色器
+      fragment: {//片元相关配置
+        // module:设置渲染管线要执行的片元着色器代码
+        module: device.createShaderModule({ code: fragment }),
+        entryPoint: "main",
+        targets: [{
+          format: format//和WebGPU上下文配置的颜色格式保持一致
+        }]
+      },
+    });
+
+
+    // 创建GPU命令编码器对象
+    const commandEncoder = device.createCommandEncoder();
+
+    const renderPass = commandEncoder.beginRenderPass({
+      // 给渲染通道指定颜色缓冲区，配置指定的缓冲区
+      colorAttachments: [{
+        // 指向用于Canvas画布的纹理视图对象(Canvas对应的颜色缓冲区)
+        // 该渲染通道renderPass输出的像素数据会存储到Canvas画布对应的颜色缓冲区(纹理视图对象)
+        view: context.getCurrentTexture().createView(),
+        storeOp: 'store',//像素数据写入颜色缓冲区
+        loadOp: 'clear',
+        clearValue: { r: 0.6, g: 0.6, b: 0.5, a: 1.0 }, //背景颜色
+      }]
+    });
+
+    // 设置该渲染通道控制渲染管线
+    renderPass.setPipeline(pipeline);
+    // 关联顶点缓冲区数据和渲染管线
+    renderPass.setVertexBuffer(0, vertexBuffer);
+    // 绘制命令
+    renderPass.draw(3);
+    // 渲染通道结束命令.end()
+    renderPass.end();
+
+    // const commandEncoder = device.createCommandEncoder();
+    const commandBuffer = commandEncoder.finish();
+    // 命令编码器缓冲区中命令传入GPU设备对象的命令队列.queue
+    device.queue.submit([commandBuffer]);
+
+  </script>
+</body>
+
+</html>
